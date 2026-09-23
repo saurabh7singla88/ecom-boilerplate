@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+build
+coverage
+pnpm-lock.yaml
+src/generated
+.sst
+.agents
+playwright-report
+test-results
