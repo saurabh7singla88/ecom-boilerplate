@@ -4,6 +4,12 @@
   "trailingComma": "all",
   "printWidth": 100,
   "plugins": ["prettier-plugin-tailwindcss"],
-  "tailwindStylesheet": "./src/app/globals.css",
-  "tailwindFunctions": ["cn", "cva"]
+  "tailwindStylesheet": "./apps/storefront/src/app/globals.css",
+  "tailwindFunctions": ["cn", "cva"],
+  "overrides": [
+    {
+      "files": "apps/admin/**",
+      "options": { "tailwindStylesheet": "./apps/admin/src/index.css" }
+    }
+  ]
 }

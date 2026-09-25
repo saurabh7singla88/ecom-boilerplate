@@ -1,0 +1,7 @@
+# Keep LF everywhere (matches Prettier), regardless of each machine's core.autocrlf.
+* text=auto eol=lf
+
+*.ico binary
+*.png binary
+*.jpg binary
+*.webp binary

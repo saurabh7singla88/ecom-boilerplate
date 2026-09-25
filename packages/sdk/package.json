@@ -1,0 +1,21 @@
+{
+  "name": "@ecom/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ecom/shared": "workspace:*",
+    "hono": "^4.13.9"
+  },
+  "devDependencies": {
+    "@ecom/api": "workspace:*",
+    "@types/node": "^22.20.4",
+    "typescript": "^5"
+  }
+}

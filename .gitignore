@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+.next/
+out/
+dist/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# generated
+packages/db/src/generated/
+
+# infra
+.sst/
+.open-next/
+
+# tests
+coverage/
+playwright-report/
+test-results/
+
+# env (commit only *.example)
+.env
+.env.*
+!.env.example
+!.env*.example
+
+# local overrides
+docker-compose.override.yml
+
+# os / editors
+.DS_Store
+Thumbs.db
+*.log

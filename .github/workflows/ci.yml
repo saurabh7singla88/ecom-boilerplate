@@ -11,11 +11,25 @@ concurrency:
 
 env:
   DATABASE_URL: postgresql://ecom:ecom@localhost:5432/ecom
-  NEXT_PUBLIC_APP_URL: http://localhost:3000
+  API_URL: http://localhost:9000/api
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ecom
+          POSTGRES_PASSWORD: ecom
+          POSTGRES_DB: ecom
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ecom -d ecom"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -23,8 +37,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # Also generates the Prisma client (postinstall in packages/db).
       - run: pnpm install --frozen-lockfile
-      - run: pnpm db:generate
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

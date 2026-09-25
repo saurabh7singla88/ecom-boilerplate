@@ -1,52 +1,42 @@
-@AGENTS.md
-
 # ecom-app
 
-UI-driven e-commerce storefront for India (INR). See `PLAN.md` for the full roadmap, architecture, and phase checklist — keep it updated as phases complete.
+E-commerce store for India (INR), split Medusa-style into a backend API and frontends. **Read [docs/architecture.md](./docs/architecture.md) before structural changes**; keep it and [PLAN.md](./PLAN.md) (phase checklist) up to date.
 
-## Stack
+## Layout
 
-- Next.js 16 (App Router) with TypeScript strict mode, React 19
-- Tailwind CSS 4 + shadcn/ui; Framer Motion for animation
-- PostgreSQL on Neon via Prisma 7 (`@prisma/adapter-pg`; Neon pooled connection string in Lambda). Generated client lives in `src/generated/prisma` (gitignored — run `pnpm db:generate`)
-- Auth.js v5 (credentials + Google), roles `CUSTOMER` / `ADMIN`
-- Payment gateway (Stripe or Razorpay, decided in Phase 3) behind `src/server/payments`
-- Zustand for client state (cart/UI); Zod + React Hook Form for forms
-- Vitest + Testing Library for unit tests, Playwright for E2E
-- SST v3 (OpenNext) deploying to AWS Lambda + CloudFront + S3
-- Package manager: pnpm
+- `apps/api` — Hono API on Lambda. The **only** code that touches the database.
+- `apps/storefront` — Next.js 16 customer site (see `apps/storefront/CLAUDE.md` for Next.js 16 specifics).
+- `apps/admin` — Vite + React admin, static build served under `/admin/`.
+- `packages/db` — Prisma 7 schema, migrations, seed, `createDb()`. Generated client in `packages/db/src/generated` (gitignored; `pnpm db:generate`, also runs on install).
+- `packages/shared` — Zod schemas, DTO types, `formatPaise`. Shared by every app.
+- `packages/sdk` — typed Hono RPC client (`createApiClient`, `unwrap`, `ApiError`).
 
-## Commands
+## Commands (repo root)
 
-- `pnpm dev` — dev server
-- `pnpm build` / `pnpm start`
-- `pnpm lint`, `pnpm typecheck`, `pnpm format`
-- `pnpm test` (Vitest), `pnpm test:e2e` (Playwright)
-- `pnpm db:generate`, `pnpm db:migrate`, `pnpm db:seed`, `pnpm db:studio`
+- `pnpm dev` — API :9000, storefront :8000, admin :5173 (needs `pnpm db:up`)
+- `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm format`
+- `pnpm db:migrate`, `pnpm db:seed`, `pnpm db:studio`
+- Filter one workspace: `pnpm --filter @ecom/api <script>`
 
-## Conventions
+## Rules
 
-- Server Components by default; add `"use client"` only when the component needs state, effects, or browser APIs.
-- Mutations go through Server Actions in `src/features/<domain>/actions.ts`. Every action validates input with Zod and checks auth/role itself — never trust the client.
-- Feature modules live in `src/features/<domain>/` (components, actions, schemas, queries). Shared UI primitives in `src/components/ui/`. Infra clients (Prisma, payments, Auth) in `src/server/`.
-- All database access goes through `src/server/db/` so the datastore can be swapped without touching features.
-- Environment variables are read only through the Zod-validated `src/lib/env.ts`, never `process.env` directly.
-- URL search params drive list/filter/sort state on catalog pages so views are shareable and RSC-cacheable.
-- Payment status is set only by the gateway webhook handler, never by the success redirect.
-- Money is stored as integer paise (INR minor units), never floats. Format with `en-IN` locale.
-- Secrets never go in the repo; local values in `.env.local`, production via AWS Secrets Manager.
-
-## Next.js 16 notes (differs from 13–15; full docs in `node_modules/next/dist/docs/`)
-
-- `params` and `searchParams` are Promises — always `await` them. Use the global `PageProps<"/route">`, `LayoutProps<"/route">`, `RouteContext<"/route">` helper types (no import needed).
-- `typedRoutes` is on: `<Link href>` must point at an existing route or typecheck fails.
-- Request-level middleware lives in `src/proxy.ts` exporting `proxy` (not `middleware.ts`); it runs on the Node runtime only.
-- `next/image`: use `preload` (not the deprecated `priority`); remote hosts go in `images.remotePatterns`.
-- `revalidateTag(tag, "max")` requires the second argument; `cacheLife`/`cacheTag` are stable imports from `next/cache`. `cacheComponents` / `"use cache"` are not enabled yet — decide in Phase 1.
-- Turbopack is the default for dev and build; `next dev` writes to `.next/dev`. Route types come from `next typegen` (run by `pnpm typecheck`).
-- Every parallel-route slot needs an explicit `default.tsx`.
+- **Frontends never import `@ecom/db`** or reach the database. They call the API through `@ecom/sdk`. The SDK imports only the API's _types_ (`AppType`).
+- **API routes are thin**: validate with `validate(target, schema)` (schemas from `@ecom/shared`), call a module service, return `c.json(...)`. Keep route chains unbroken (`new Hono().get(...).get(...)`) so RPC types flow to the SDK.
+- **Services** (`modules/<name>/service.ts`) own business logic and Prisma queries, and return DTOs from `@ecom/shared` — never raw Prisma rows. Build them as `createXService(db)` so tests can pass the test DB.
+- **Errors**: throw `notFound()` / `badRequest()` / `HttpError` from `apps/api/src/lib/errors.ts`; the app's error handler returns `{ error: { code, message } }`.
+- `/api/admin/*` is behind `requireAdmin`. Never add an admin route outside that router.
+- Slow or retryable side effects go through `emit()` (`lib/events.ts`) + a handler in `subscribers/`. Handlers must be idempotent (SQS is at-least-once).
+- Env vars are read only through each app's Zod-validated `env.ts`.
+- Money is integer paise (`*Paise` fields); format only in UI via `formatPaise`. Prices are GST-inclusive.
+- Payment status is set only by the gateway webhook handler, never by a redirect (Phase 4).
+- Secrets never go in the repo: local values in `.env` / `.env.local` (git-ignored), cloud via `sst secret set`.
 
 ## Serverless constraints
 
-- Code runs on Lambda: no long-lived in-memory state, no filesystem persistence, keep cold-start size small (avoid heavy top-level imports in server code).
-- Long-running or retryable work (emails, stock sync) goes to the SQS worker, not the request path.
+- Everything runs on Lambda: no in-memory state that must survive between requests, no filesystem writes, keep imports small (lazy-import heavy SDKs, like `lib/events.ts` does).
+- No VPC, NAT Gateway, RDS, API Gateway or other always-on resources — they break the ~$0 idle cost. Discuss before adding anything with an hourly price.
+
+## Testing
+
+- API tests hit a real Postgres test database (`<db>_test`, created and migrated by `apps/api/test/global-setup.ts`). Use `resetDatabase` + fixtures from `apps/api/test/fixtures.ts`.
+- New service logic gets a `service.test.ts`; new routes get coverage in `app.test.ts` or a module route test.

@@ -1,147 +1,103 @@
 # ecom-app — Build Plan
 
-A UI-driven e-commerce storefront for India (INR). Goals for v1: polished shopping UI, basic order and purchase flow, online payments, a solid security layer, and pay-per-use deployment on AWS.
+A UI-driven e-commerce store for India (INR). Goals for v1: polished shopping UI, cart → checkout → order flow, online payments (Razorpay), a solid security layer, an admin dashboard, and pay-per-use deployment on AWS with ~$0 idle cost.
+
+Architecture, layout and conventions: **[docs/architecture.md](./docs/architecture.md)**.
 
 ## Stack
 
-| Layer            | Choice                                                                                | Notes                                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Framework        | Next.js 16 (App Router), TypeScript strict, `typedRoutes`                             | RSC for product pages, Server Actions for mutations; Turbopack default                            |
-| UI               | Tailwind CSS + shadcn/ui, Framer Motion                                               | Fully customizable, fast to build                                                                 |
-| Client state     | Zustand (cart/UI), TanStack Query where client fetching is needed                     | RSC by default; keep client JS small                                                              |
-| Forms/validation | React Hook Form + Zod                                                                 | Zod schemas shared between server and client                                                      |
-| Database         | PostgreSQL on Neon (serverless) + Prisma 7                                            | `pg` driver via `@prisma/adapter-pg`; Neon pooled connection string in Lambda; free tier to start |
-| Auth             | Auth.js v5 — credentials (bcrypt) + Google                                            | Roles: `CUSTOMER`, `ADMIN`                                                                        |
-| Payments         | Stripe or Razorpay (decide in Phase 3), hosted checkout + webhooks                    | Webhook is the source of truth for payment status; see "Region: India"                            |
-| Images           | `next/image` + S3 + CloudFront                                                        |                                                                                                   |
-| Email            | Resend + React Email                                                                  | Order confirmations                                                                               |
-| Background jobs  | SQS + Lambda / EventBridge                                                            | Post-payment work, retries                                                                        |
-| Testing          | Vitest + Testing Library, Playwright (E2E), Dockerized Postgres for integration tests |                                                                                                   |
-| Quality          | ESLint, Prettier, Husky + lint-staged, GitHub Actions                                 |                                                                                                   |
-| Infra / deploy   | SST v3 (OpenNext) → Lambda + CloudFront + S3; Secrets Manager; CloudWatch             | Pay-per-use, ~$0 idle                                                                             |
-
-### Why these choices
-
-- **Next.js over Java/Spring:** the app is UI-heavy; React + RSC gives the best storefront UX in a single codebase.
-- **Lambda over containers:** near-zero idle cost. Cold starts (~300–800ms) are acceptable at small scale; mitigate with streaming, provisioned concurrency later if needed.
-- **Neon Postgres over DynamoDB:** same ~$0 idle cost, but keeps rich filtering/sorting/search and ad-hoc queries, which a storefront depends on. Avoids upfront access-pattern lock-in. DB access is isolated behind `src/server/db` so this can change later.
-
-## Architecture
-
-```
-Browser ──► CloudFront ──► Lambda (Next.js server via OpenNext)
-                │                │
-                ├─► S3 (static assets, product images)
-                │                ├─► Neon Postgres (Prisma 7, pg adapter, pooled connection)
-                │                ├─► Payment gateway (hosted checkout, webhooks)
-                │                └─► SQS ──► Lambda workers (email, stock, retries)
-                └─► Route53 + ACM (domain, HTTPS)
-```
-
-## Project structure
-
-```
-src/
-  app/                  # routes (App Router)
-    (storefront)/       # home, products, cart, checkout, account
-    admin/              # admin dashboard
-    api/                # route handlers (webhooks etc.)
-  features/             # feature modules: ui + actions + schemas per domain
-    catalog/ cart/ checkout/ orders/ auth/ admin/
-  components/ui/        # shadcn primitives
-  server/
-    db/                 # Prisma client, repositories
-    auth/               # Auth.js config
-    payments/           # Stripe client + webhook handlers
-  lib/                  # utils, env (Zod-validated), constants
-prisma/                 # schema, migrations, seed
-sst.config.ts           # infra
-```
-
-## Data model (v1)
-
-- `User` (role: CUSTOMER | ADMIN), `Account`, `Session` (Auth.js)
-- `Category`, `Product`, `ProductVariant` (size/color, price, stock), `ProductImage`
-- `Cart`, `CartItem`
-- `Address`
-- `Order` (status: PENDING → PAID → FULFILLED | CANCELLED), `OrderItem`
-- `Payment` (Stripe session/intent ids, status, amount — audit trail)
+| Layer           | Choice                                                                               |
+| --------------- | ------------------------------------------------------------------------------------ |
+| Monorepo        | pnpm workspaces: `apps/{api,storefront,admin}`, `packages/{db,shared,sdk}`           |
+| Backend API     | Hono (TypeScript) on AWS Lambda (Function URL)                                       |
+| Database        | PostgreSQL — Docker locally, Neon in the cloud — via Prisma 7 (`@prisma/adapter-pg`) |
+| API client      | `@ecom/sdk` — Hono RPC typed client, no codegen                                      |
+| Validation      | Zod schemas in `@ecom/shared`, shared by API and frontends                           |
+| Storefront      | Next.js 16 (App Router), Tailwind 4 + shadcn/ui                                      |
+| Admin           | Vite + React 19 + Tailwind 4, static build on S3                                     |
+| Auth            | Better Auth in the API (customer + admin roles)                                      |
+| Payments        | Razorpay, webhook as the source of truth                                             |
+| Background jobs | SQS + subscriber Lambda (in-process locally)                                         |
+| Email           | Resend + React Email                                                                 |
+| Testing         | Vitest (API against Docker Postgres, UI units), Playwright (E2E)                     |
+| Quality         | ESLint, Prettier, Husky + lint-staged, GitHub Actions                                |
+| Infra           | SST v4 → CloudFront Router + Lambda + S3 + SQS, `ap-south-1`                         |
 
 ## Phases
 
-### Phase 0 — Foundation
+### Phase 0 — Foundation (done)
 
-- [x] `create-next-app` (TS, Tailwind, App Router, `src/`), shadcn/ui, Prettier, Husky + lint-staged
-- [x] Prisma 7 init (`prisma7.config.ts`, `@prisma/adapter-pg`); Docker Compose Postgres for local/integration tests
-- [ ] Neon project created; `DATABASE_URL` set as SST secret
-- [x] Zod-validated env config, `.env.example`, `.env.local`
-- [x] Base layout: header with nav, search + cart badge; footer; `(storefront)` route group; placeholder home and `/products`
-- [x] `sst.config.ts` (Nextjs component, `ap-south-1`, `DatabaseUrl` secret)
-- [ ] First `sst deploy --stage dev` to confirm the Lambda pipeline (needs `aws configure`)
-- [x] GitHub Actions: lint, typecheck, test, build
-- [x] Vitest + Playwright configured with smoke tests (`pnpm exec playwright install chromium` before first e2e run)
-- [x] CLAUDE.md with conventions and Next.js 16 notes
+- [x] Next.js scaffold, Tailwind + shadcn/ui, Prettier, ESLint, Husky + lint-staged
+- [x] Prisma 7 + Docker Compose Postgres
+- [x] Base storefront layout (header, footer, home, placeholder `/products`)
+- [x] Vitest + Playwright smoke tests, GitHub Actions CI
 
-### Phase 1 — Storefront UI + Catalog
+### Phase 1 — API / storefront / admin split (current)
 
-- [ ] Prisma models: Category, Product, ProductVariant, ProductImage; seed script with realistic data
-- [ ] Home page (hero, featured, categories)
-- [ ] `/products` — filters, sort, search with URL-driven state; skeletons + Suspense streaming
-- [ ] `/products/[slug]` — gallery, variant picker, add to cart
-- [ ] SEO metadata, OG images, sitemap
-- [ ] Admin: `/admin/products` CRUD with image upload to S3
+- [x] Architecture documented (`docs/architecture.md`)
+- [x] pnpm workspace; storefront moved to `apps/storefront`; root `.gitignore` + `.gitattributes`; shared TS/ESLint/Prettier config
+- [x] `packages/db`: Prisma schema moved here; catalog models (Category, Product, ProductVariant, ProductImage); first migration; seed data
+- [x] `packages/shared`: product DTOs + query schemas, `formatPaise`
+- [x] `apps/api`: Hono app, env, error handling, health route, event bus + SQS subscriber entry, products module (`/api/store/products`, `/api/store/products/:handle`, `/api/store/categories`), locked `/api/admin/*`
+- [x] `packages/sdk`: typed client
+- [x] Storefront reads the catalog through the SDK: `/products` (category filter, sort, pagination) and `/products/[handle]`; Prisma removed from the storefront
+- [x] `apps/admin`: empty dashboard shell served under `/admin/`
+- [x] `pnpm dev` runs API + storefront + admin with single-domain dev proxies
+- [x] `sst.config.ts`: Router, Api function, Events queue + DLQ + subscriber, Storefront, Admin, `DatabaseUrl` secret
+- [x] Tests: API service + routes (Vitest, real Postgres), storefront unit tests; CI runs every workspace with a Postgres service
+- [ ] Playwright E2E run locally (specs written; needs `pnpm --filter @ecom/storefront exec playwright install chromium`)
+- [x] README, CLAUDE.md updated
+- [ ] First `sst deploy --stage dev` (needs `aws configure` + a Neon database)
 
-### Phase 2 — Cart, Checkout & Orders
+### Phase 2 — Cart & checkout
 
-- [ ] Cart: Zustand + localStorage for guests, merged into DB cart on login; slide-out drawer; optimistic updates
-- [ ] Models: Cart, CartItem, Order, OrderItem, Address
-- [ ] Checkout page (address, shipping method, summary) via Server Actions + Zod
-- [ ] Order creation + stock reservation inside a Prisma transaction
-- [ ] `/account/orders` history + detail; admin order list with status updates
+- [ ] Models: Cart, CartItem, Address, Order, OrderItem (status: PENDING → PAID → FULFILLED | CANCELLED)
+- [ ] `cart` module: guest cart by cookie, add/update/remove, merge on login
+- [ ] Storefront: cart drawer (optimistic updates), checkout page (Indian address format, PIN code, state list)
+- [ ] Order creation + stock reservation in one transaction
+- [ ] Shipping: flat rate + free above ₹999
 
-### Phase 3 — Payments (Stripe or Razorpay)
+### Phase 3 — Auth & accounts
 
-- [ ] Pick the gateway (business entity registered → Stripe; otherwise Razorpay)
-- [ ] Create a hosted checkout session from the order → redirect → `/checkout/success` and `/checkout/cancel`
-- [ ] Webhook route handler for payment success / failure events → update Order + Payment
-- [ ] Signature verification, idempotent event handling
-- [ ] Post-payment work via SQS worker: confirmation email, stock decrement
-- [ ] Local: Stripe CLI webhook forwarding
+- [ ] Better Auth in `apps/api` (email/password + Google), sessions in Postgres, roles `CUSTOMER` / `ADMIN`
+- [ ] `/api/admin/*` guarded by admin session; `/api/store/customers/me/*` by customer session
+- [ ] Storefront: sign in/up, `/account`, order history
+- [ ] Admin: login screen
 
-### Phase 4 — Security
+### Phase 4 — Payments (Razorpay)
 
-- [ ] Auth.js: credentials (bcrypt) + Google; `src/proxy.ts` guarding `/account`, `/admin`
-- [ ] Role checks inside every Server Action and admin route handler (never trust the client)
-- [ ] Zod validation on every boundary; Prisma parameterized queries
-- [ ] Rate limiting on login, checkout, webhooks (Upstash Ratelimit or DynamoDB-backed)
-- [ ] Security headers + CSP in `next.config`; secrets only via env / Secrets Manager
-- [ ] Dependabot / `npm audit` in CI; Playwright tests for auth and checkout flows
+- [ ] `payments` module: create Razorpay order from our order, hosted checkout
+- [ ] Webhook route: signature verification, idempotent handling, updates Order + Payment
+- [ ] `order.paid` event → subscribers: confirmation email (Resend), stock decrement
+- [ ] Cash on Delivery (optional)
 
-### Phase 5 — AWS deployment (production)
+### Phase 5 — Admin dashboard
 
-- [ ] SST v3: Next.js site (Lambda + CloudFront + S3), custom domain (Route53 + ACM), Secrets Manager for env
-- [ ] Neon production branch; Prisma migrations run as a deploy step
-- [ ] SQS queue + worker Lambda for background jobs
-- [ ] S3 + CloudFront for product images
-- [ ] CloudWatch logs/alarms; GitHub Actions deploy on `main`
-- [ ] Later: WAF, provisioned concurrency if cold starts hurt, CloudFront caching for product pages
+- [ ] Products CRUD with image upload (S3 presigned URLs)
+- [ ] Orders list/detail, status updates, refunds
+- [ ] Categories, inventory
 
-## Cost expectations (early stage)
+### Phase 6 — India tax & invoices
 
-- Lambda + CloudFront + S3: within free tier / low single-digit $ per month
-- Neon: free tier
-- Stripe: per-transaction fees only
-- Route53: ~$0.50/mo per hosted zone; domain registration separate
+- [ ] GST: CGST+SGST (intra-state) vs IGST (inter-state), HSN-based rates per product
+- [ ] GST invoice PDFs attached to order emails
+
+### Phase 7 — Production hardening
+
+- [ ] Custom domain on the Router (Route53 + ACM)
+- [ ] Neon production branch; `prisma migrate deploy` as a deploy step
+- [ ] Rate limiting (login, checkout, webhooks), security headers + CSP
+- [ ] CloudWatch alarms; GitHub Actions deploy on `main`
+- [ ] Later if needed: WAF, provisioned concurrency, CloudFront caching for product pages
 
 ## Region: India (INR)
 
-- Currency: INR, stored as integer paise.
-- Tax: GST. Stripe Tax does not support India, so GST (CGST/SGST/IGST by state, HSN-based rates) is implemented in-app and shown on invoices.
-- Payment gateway (decide in Phase 3): Stripe India requires a registered business entity; **Razorpay** supports individuals and UPI/netbanking/cards natively. Keep `src/server/payments` gateway-agnostic so either fits.
-- Locale: `en-IN` formatting, Indian address format (PIN code, state list).
+- Currency INR, stored as integer paise; formatted with `en-IN`.
+- GST implemented in-app (Stripe Tax and most SaaS tax engines don't cover India).
+- Razorpay works for individuals and supports UPI, cards, net banking and wallets.
+- Indian address format: PIN code, state list.
 
 ## Open questions
 
-- Shipping: flat rate vs. carrier rates
-- Guest checkout allowed, or account required?
-- Product search: Postgres full-text is fine to start; revisit if catalog grows large
+- Guest checkout, or account required?
+- Product search: Postgres full-text to start; revisit if the catalog grows.
